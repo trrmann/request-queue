@@ -41,10 +41,24 @@ export class PostgresQueueStore {
     return this.database.query(this.queries[name], params);
   }
 
+  /**
+   * Create the queue's schema, table and index (idempotent). Runs on one connection under
+   * platform-db's bootstrap lock, so it never overlaps another process's schema bootstrap.
+   * Throws while the database is unreachable; RequestQueue.start() retries it.
+   */
   async initialize() {
-    await this.run('create_schema');
-    await this.run('create_table');
-    await this.run('create_index');
+    const locks = PostgresDatabase.lockQueries;
+    const key = PostgresDatabase.BOOTSTRAP_LOCK_KEY;
+    const client = await this.database.getClient();
+    try {
+      await client.query(locks.acquire_advisory_lock, [key]);
+      for (const name of ['create_schema', 'create_table', 'create_index']) {
+        await client.query(this.queries[name]);
+      }
+    } finally {
+      await client.query(locks.release_advisory_lock, [key]).catch(() => {});
+      client.release();
+    }
   }
 
   async enqueue(queueName, request) {

@@ -1,17 +1,18 @@
 /**
  * RequestQueue test: a fake service that is asleep (not listening, then 503)
  * must not cause failures or lost requests; the rate limit must hold; durable
- * jobs must survive a queue restart; secrets must never reach the database.
+ * jobs must survive a queue restart; secrets must never reach the database; and the
+ * queue must cope with its own database being down at start or dropping out mid-run.
  * Runs only against the local scratch database (local-db.sh).
  */
 
-import { PostgresDatabase, LocalDatabaseTest } from 'platform-db';
+import { PostgresDatabase, LocalDatabaseTest, TcpRelay } from 'platform-db';
 import { RequestQueue } from '../requestQueue.mjs';
 import { HttpTransport } from '../httpTransport.mjs';
 import { TokenBucket } from '../tokenBucket.mjs';
 import { RetryPolicy } from '../retryPolicy.mjs';
 import { PostgresQueueStore } from '../postgresQueueStore.mjs';
-import { QueueTimeoutError } from '../errors.mjs';
+import { QueueTimeoutError, QueueStoreUnavailableError } from '../errors.mjs';
 import { FakeService } from './fakeService.mjs';
 
 export class RequestQueueTest extends LocalDatabaseTest {
@@ -211,8 +212,175 @@ export class RequestQueueTest extends LocalDatabaseTest {
     }
   }
 
+  /**
+   * A queue whose store reaches the database through a TCP relay on `port`, so the test
+   * can take "the database" away and bring it back.
+   */
+  async makeRelayedQueue(name, port, overrides = {}) {
+    const database = new PostgresDatabase({
+      ...this.database.config,
+      port,
+      connectionTimeoutMillis: 500,
+    });
+    this.databases.push(database);
+    const store = new PostgresQueueStore({ database, schema: this.constructor.SCHEMA });
+    return { store, queue: this.makeQueue({ name, durableStore: store, ...overrides }) };
+  }
+
+  relay() {
+    return new TcpRelay({
+      targetHost: this.database.config.host,
+      targetPort: this.database.config.port,
+    });
+  }
+
+  static async stateOf(promise) {
+    const marker = Symbol('pending');
+    try {
+      return (await Promise.race([promise, Promise.resolve(marker)])) === marker
+        ? 'pending'
+        : 'resolved';
+    } catch {
+      return 'rejected';
+    }
+  }
+
+  /** Poll `probe` until it returns true or `ms` pass. */
+  static async waitUntil(probe, ms = 5000) {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (await probe()) return true;
+      await this.sleep(100);
+    }
+    return false;
+  }
+
+  async checkStartWaitsForDatabase() {
+    console.log('\nStart-up: the queue database is down at first');
+    const port = await TcpRelay.freePort();
+    const relay = this.relay();
+    const { queue } = await this.makeRelayedQueue('late-db', port);
+    try {
+      const starting = queue.start();
+      await this.constructor.sleep(700);
+      this.check(
+        'start() waits while the database is down',
+        (await this.constructor.stateOf(starting)) === 'pending'
+      );
+      await relay.start(port);
+      await starting;
+      this.check('start() completes once the database answers', queue.running);
+      const response = await queue.request(
+        { method: 'POST', path: '/echo', body: { late: 1 } },
+        { durable: true }
+      );
+      this.check('durable request delivered after a late start', response.status === 200);
+    } finally {
+      await queue.stop();
+      await relay.stop();
+    }
+
+    const deadPort = await TcpRelay.freePort();
+    const { queue: doomed } = await this.makeRelayedQueue('no-db', deadPort, {
+      startTimeoutMs: 800,
+    });
+    let error = null;
+    try {
+      await doomed.start();
+    } catch (caught) {
+      error = caught;
+    }
+    this.check(
+      'start() gives up with QueueStoreUnavailableError at the limit',
+      error instanceof QueueStoreUnavailableError,
+      error?.message
+    );
+  }
+
+  async checkDatabaseDropMidRun() {
+    console.log('\nThe queue database drops out while running');
+    const port = await TcpRelay.freePort();
+    const relay = this.relay();
+    await relay.start(port);
+    const { store, queue } = await this.makeRelayedQueue('drop', port);
+    await queue.start();
+    try {
+      await this.service.close();
+      const jobId = await queue.enqueue({ method: 'POST', path: '/echo', body: { drop: 1 } });
+      await this.constructor.sleep(300); // claimed, sent, refused, rescheduled
+      await relay.stop(); // the database goes away
+      await this.service.listen();
+      const interactive = await queue.request({
+        method: 'POST',
+        path: '/echo',
+        body: { meanwhile: 1 },
+      });
+      this.check(
+        'interactive requests keep flowing while the database is down',
+        interactive.status === 200
+      );
+      let enqueueError = null;
+      try {
+        await queue.enqueue({ method: 'POST', path: '/echo', body: { drop: 2 } });
+      } catch (caught) {
+        enqueueError = caught;
+      }
+      this.check('enqueue() reports the outage to the caller', enqueueError !== null);
+      await this.constructor.sleep(1000);
+      this.check('worker is still running during the outage', queue.running);
+      await relay.start(port); // the database is back
+      const delivered = await this.constructor.waitUntil(
+        async () => (await store.get(jobId))?.status === 'done'
+      );
+      this.check('stored job delivered after the database returns', delivered);
+    } finally {
+      await queue.stop();
+      await relay.stop();
+    }
+  }
+
+  async checkResultRecordedAfterOutage() {
+    console.log('\nSent, then the database drops before the result is recorded');
+    const port = await TcpRelay.freePort();
+    const relay = this.relay();
+    await relay.start(port);
+    const { store, queue } = await this.makeRelayedQueue('record', port);
+    await queue.start();
+    try {
+      this.service.beforeRespond = async () => {
+        this.service.beforeRespond = null;
+        await relay.stop(); // the service answers, but the queue can't record it
+      };
+      const before = this.service.received.filter((r) => r.body?.record).length;
+      const jobId = await queue.enqueue({ method: 'POST', path: '/echo', body: { record: 1 } });
+      await this.constructor.waitUntil(async () => queue.pendingRecords.length > 0, 3000);
+      this.check(
+        'result kept in memory while the database is down',
+        queue.pendingRecords.length === 1
+      );
+      await this.constructor.sleep(500);
+      await relay.start(port);
+      const recorded = await this.constructor.waitUntil(
+        async () => (await store.get(jobId))?.status === 'done'
+      );
+      this.check('result recorded once the database is back', recorded);
+      const sends = this.service.received.filter((r) => r.body?.record).length - before;
+      this.check('request was sent exactly once', sends === 1, String(sends));
+    } finally {
+      this.service.beforeRespond = null;
+      await queue.stop();
+      await relay.stop();
+    }
+  }
+
   async run() {
     this.assertLocalTarget();
+    let unhandled = 0;
+    const onUnhandled = (reason) => {
+      unhandled += 1;
+      console.error('Unhandled rejection:', reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
     console.log('RequestQueue test (local scratch database)\n');
     await this.resetDatabase();
     await this.service.listen();
@@ -221,7 +389,12 @@ export class RequestQueueTest extends LocalDatabaseTest {
       await this.checkRateLimit();
       await this.checkDurability();
       await this.checkTimeoutAndSecrets();
+      await this.checkStartWaitsForDatabase();
+      await this.checkDatabaseDropMidRun();
+      await this.checkResultRecordedAfterOutage();
+      this.check('no unhandled promise rejections', unhandled === 0, String(unhandled));
     } finally {
+      process.off('unhandledRejection', onUnhandled);
       await this.service.close();
       await this.resetDatabase();
     }

@@ -14,6 +14,7 @@ export class FakeService {
     this.server = null;
     this.awakeAt = 0;
     this.received = [];
+    this.beforeRespond = null; // optional async hook run after a request is recorded
   }
 
   get baseUrl() {
@@ -55,6 +56,7 @@ export class FakeService {
       return;
     }
     this.received.push({ method: req.method, path: req.url, body, at });
+    if (this.beforeRespond) await this.beforeRespond();
     if (req.url === '/bad') {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'error', message: 'bad request' }));

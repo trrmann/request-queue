@@ -18,3 +18,14 @@ export class QueueTimeoutError extends Error {
     this.waitedMs = waitedMs;
   }
 }
+
+/** The durable store did not become ready within the start-up limit of RequestQueue.start(). */
+export class QueueStoreUnavailableError extends Error {
+  constructor(queueName, attempts, cause) {
+    super(`Queue ${queueName}: store not ready after ${attempts} attempts: ${cause?.message}`, {
+      cause,
+    });
+    this.name = 'QueueStoreUnavailableError';
+    this.attempts = attempts;
+  }
+}
