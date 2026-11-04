@@ -1,0 +1,33 @@
+{
+  "name": "request-queue",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Durable, rate-limited request queue for calling services that may be asleep",
+  "license": "ISC",
+  "type": "module",
+  "exports": {
+    ".": "./src/scripts/js/modules/index.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "src/scripts/sh/local-db.sh run node src/scripts/js/modules/tests/request-queue-test.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "verify": "npm run format && npm run lint"
+  },
+  "dependencies": {
+    "platform-db": "file:../platform-db"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.13.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.7",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10"
+  }
+}
