@@ -2,11 +2,6 @@
 
 ## open
 
-- **Priority classes and database-work scheduling (owner request, 2026-11-04; after the FlashCards release).**
-  platform-db will route its queries through a scheduler built on this package (concurrency cap, rate limit, priority
-  classes from a rules file, ageing). That needs a generic job transport (a function, not only HTTP) and priorities
-  in `claimNext`. Design: iam-service `documents/PLATFORM_ACCESS_AND_STARTUP.md`.
-
 - Idempotency: a retried request whose first try reached the service but lost its response can be applied twice.
   Send an `Idempotency-Key` per job and have services de-duplicate (iam-service first).
 - Optional keep-warm: a periodic health ping can keep a free-tier service awake, but it consumes the account's
@@ -14,6 +9,10 @@
 
 ## resolved
 
+- **platform-db v0.2.1 scheduling (v0.1.4, 2026-11-04).** Database work is scheduled in platform-db (`QueryScheduler`);
+  the queue's store calls use a 1 s waiting limit so the worker never stalls inside one call. `TokenBucket` moved to
+  platform-db. **Resolved:** `npm test` 27/27; on platform-db v0.2.0 (no short limit) the store's bookkeeping waited
+  inside the scheduler and the "result kept in memory" check failed, which is what the limit fixes.
 - **Outages of the queue's own database (v0.1.1, 2026-11-04).**
   - `start()` waits for the database with backoff (`QueueStoreUnavailableError` at the limit).
   - Table creation runs under platform-db's bootstrap lock.

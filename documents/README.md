@@ -18,6 +18,7 @@ own queue, and durable jobs live in that application's schema of the always-on s
 | Queue database down at start  | `start()` creates the queue table (under platform-db's bootstrap lock) and recovers unfinished jobs, retrying with backoff; after `startTimeoutMs` (default 120 s) it throws `QueueStoreUnavailableError`                                                        |
 | Queue database drops out      | The worker never stops. Interactive requests keep flowing (memory only); durable work pauses with backoff and resumes when the database answers. Failures 1, 2, 4, 8 … are logged, then one line on recovery                                                     |
 | Sent, but result not recorded | The result is kept in memory and written when the database is back, so the request isn't sent twice. If the process ends first, the job is resent after the next start (**at-least-once**): durable requests must be safe to repeat until idempotency keys exist |
+| Database scheduling           | Store queries run through platform-db's `QueryScheduler` with a 1 s waiting limit (`PostgresQueueStore.QUERY_WAIT_MS`), so they fail fast and the queue's own backoff takes over. `TokenBucket` now lives in platform-db (re-exported here)                      |
 | Enqueue during an outage      | `enqueue()` and durable `request()` throw straight away; the caller decides (retry later, or report)                                                                                                                                                             |
 
 ## Usage
