@@ -9,7 +9,7 @@
 import { PostgresDatabase, LocalDatabaseTest, TcpRelay } from 'platform-db';
 import { RequestQueue } from '../requestQueue.mjs';
 import { HttpTransport } from '../httpTransport.mjs';
-import { TokenBucket } from '../tokenBucket.mjs';
+import { TokenBucket } from 'platform-db';
 import { RetryPolicy } from '../retryPolicy.mjs';
 import { PostgresQueueStore } from '../postgresQueueStore.mjs';
 import { QueueTimeoutError, QueueStoreUnavailableError } from '../errors.mjs';

@@ -11,6 +11,8 @@ import { PostgresDatabase } from 'platform-db';
 
 export class PostgresQueueStore {
   static IDENTIFIER = /^[a-z_][a-z0-9_]{0,62}$/;
+  /** Longest a store query may wait in platform-db's scheduler (queue + retries). */
+  static QUERY_WAIT_MS = 1000;
   static sqlRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../sql');
   static templates = PostgresDatabase.loadNamedSqlStatements(
     'pg/queue-queries.sql',
@@ -37,8 +39,14 @@ export class PostgresQueueStore {
     );
   }
 
+  /**
+   * Run a named store query. The queue has its own outage handling (backoff, results kept
+   * in memory), so store calls fail fast instead of waiting out the scheduler's class limit.
+   */
   async run(name, params = []) {
-    return this.database.query(this.queries[name], params);
+    return this.database.query(this.queries[name], params, {
+      maxWaitMs: PostgresQueueStore.QUERY_WAIT_MS,
+    });
   }
 
   /**
