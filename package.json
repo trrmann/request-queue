@@ -20,7 +20,7 @@
     "verify": "npm run format && npm run lint"
   },
   "dependencies": {
-    "platform-db": "file:../platform-db"
+    "platform-db": "git+https://github.com/trrmann/platform-db.git#v0.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
