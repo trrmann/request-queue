@@ -9,6 +9,10 @@
 
 ## resolved
 
+- **Per-request timeout (v0.1.5, 2026-11-04).** A request may carry its own `timeoutMs`; `HttpTransport` uses it
+  instead of its default for that try. Needed for slow calls such as the IAM service's backup import (phase 3d), which
+  must not be cut off at 15 s and retried while still running. Also on platform-db v0.2.4. **Resolved:** `npm test`
+  29/29 (2 new checks).
 - **platform-db v0.2.1 scheduling (v0.1.4, 2026-11-04).** Database work is scheduled in platform-db (`QueryScheduler`);
   the queue's store calls use a 1 s waiting limit so the worker never stalls inside one call. `TokenBucket` moved to
   platform-db. **Resolved:** `npm test` 27/27; on platform-db v0.2.0 (no short limit) the store's bookkeeping waited

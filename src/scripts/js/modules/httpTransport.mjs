@@ -1,7 +1,8 @@
 /**
  * HTTP transport for the request queue. Sends a queued request
  * `{ method, path, body }` to `baseUrl`, adding headers at send time (so
- * credentials are never stored with the request), with a per-try timeout.
+ * credentials are never stored with the request), with a per-try timeout: the transport's,
+ * or the request's own `timeoutMs` (for slow calls such as backups).
  * Network errors and timeouts throw a retryable TransportError; any HTTP
  * response is returned as `{ status, body }` for the queue to classify.
  */
@@ -16,9 +17,10 @@ export class HttpTransport {
     this.timeoutMs = timeoutMs;
   }
 
-  async send({ method = 'GET', path = '/', body, headers = {} }) {
+  async send({ method = 'GET', path = '/', body, headers = {}, timeoutMs }) {
+    const limitMs = timeoutMs ?? this.timeoutMs;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), limitMs);
     try {
       const response = await fetch(`${this.baseUrl}${path}`, {
         method,
@@ -39,8 +41,7 @@ export class HttpTransport {
       }
       return { status: response.status, body: parsed };
     } catch (error) {
-      const reason =
-        error.name === 'AbortError' ? `timed out after ${this.timeoutMs} ms` : error.message;
+      const reason = error.name === 'AbortError' ? `timed out after ${limitMs} ms` : error.message;
       throw new TransportError(`${method} ${path}: ${reason}`, { retryable: true, cause: error });
     } finally {
       clearTimeout(timer);

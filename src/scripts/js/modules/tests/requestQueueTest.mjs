@@ -255,6 +255,28 @@ export class RequestQueueTest extends LocalDatabaseTest {
     return false;
   }
 
+  async checkPerRequestTimeout() {
+    console.log('\nPer-request timeout');
+    const transport = new HttpTransport({ baseUrl: this.service.baseUrl, timeoutMs: 100 });
+    this.service.beforeRespond = () => new Promise((resolve) => setTimeout(resolve, 300));
+    try {
+      let timedOut = null;
+      try {
+        await transport.send({ method: 'GET', path: '/slow' });
+      } catch (error) {
+        timedOut = error;
+      }
+      this.check(
+        "a slow answer times out at the transport's limit",
+        /timed out after 100 ms/.test(timedOut?.message ?? '')
+      );
+      const answer = await transport.send({ method: 'GET', path: '/slow', timeoutMs: 2000 });
+      this.check("a request's own timeoutMs allows a slower answer", answer.status === 200);
+    } finally {
+      this.service.beforeRespond = null;
+    }
+  }
+
   async checkStartWaitsForDatabase() {
     console.log('\nStart-up: the queue database is down at first');
     const port = await TcpRelay.freePort();
@@ -389,6 +411,7 @@ export class RequestQueueTest extends LocalDatabaseTest {
       await this.checkRateLimit();
       await this.checkDurability();
       await this.checkTimeoutAndSecrets();
+      await this.checkPerRequestTimeout();
       await this.checkStartWaitsForDatabase();
       await this.checkDatabaseDropMidRun();
       await this.checkResultRecordedAfterOutage();
