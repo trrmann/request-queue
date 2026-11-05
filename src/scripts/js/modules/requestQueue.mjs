@@ -39,6 +39,9 @@ export class RequestQueue {
    * @param {number} [options.maxWaitMs] - How long callers wait by default
    * @param {number} [options.pollIntervalMs] - Idle wait between store checks
    * @param {number} [options.startTimeoutMs] - How long start() waits for the durable store
+   * @param {number} [options.concurrency] - Requests sent at the same time (default 1). With
+   *   more than one, a slow request (e.g. to a service that is still waking) doesn't hold up
+   *   the others. Each job is still sent by one worker at a time.
    */
   constructor({
     name,
@@ -49,6 +52,7 @@ export class RequestQueue {
     maxWaitMs = 120000,
     pollIntervalMs = 250,
     startTimeoutMs = 120000,
+    concurrency = 1,
   }) {
     if (!name || !transport) throw new Error('RequestQueue needs a name and a transport');
     this.name = name;
@@ -64,9 +68,11 @@ export class RequestQueue {
     this.storeFailures = 0; // consecutive durable-store failures
     this.storeRetryAt = 0; // no durable-store access before this time (backoff)
     this.waiters = new Map(); // job_id -> { resolve, reject, timer }
+    this.concurrency = Math.max(1, Math.floor(concurrency));
     this.running = false;
-    this.wakeSignal = null;
-    this.loop = null;
+    this.wakeSignals = new Set(); // one per idle worker
+    this.loops = [];
+    this.flushing = null; // the one flush of pendingRecords in progress
   }
 
   /**
@@ -76,7 +82,7 @@ export class RequestQueue {
     if (this.running) return;
     await this.prepareDurableStore();
     this.running = true;
-    this.loop = this.work();
+    this.loops = Array.from({ length: this.concurrency }, () => this.work());
   }
 
   /**
@@ -120,8 +126,8 @@ export class RequestQueue {
   /** Stop after the current send; durable jobs stay stored for the next start. */
   async stop() {
     this.running = false;
-    this.wake();
-    await this.loop;
+    this.wakeAll();
+    await Promise.all(this.loops);
     try {
       await this.flushPendingRecords();
     } catch {
@@ -172,21 +178,25 @@ export class RequestQueue {
     });
   }
 
+  /** Wake one idle worker (new work arrived). */
   wake() {
-    if (this.wakeSignal) {
-      const signal = this.wakeSignal;
-      this.wakeSignal = null;
-      signal();
-    }
+    const [signal] = this.wakeSignals;
+    if (signal) signal();
+  }
+
+  wakeAll() {
+    for (const signal of [...this.wakeSignals]) signal();
   }
 
   idle(ms = this.pollIntervalMs) {
     return new Promise((resolve) => {
-      const timer = setTimeout(resolve, ms);
-      this.wakeSignal = () => {
+      const signal = () => {
         clearTimeout(timer);
+        this.wakeSignals.delete(signal);
         resolve();
       };
+      const timer = setTimeout(signal, ms);
+      this.wakeSignals.add(signal);
     });
   }
 
@@ -214,13 +224,23 @@ export class RequestQueue {
     }
   }
 
-  /** Write the results kept in memory while the store was down, oldest first. */
-  async flushPendingRecords() {
-    while (this.pendingRecords.length > 0) {
-      const { store, method, args } = this.pendingRecords[0];
-      await store[method](...args);
-      this.pendingRecords.shift();
+  /**
+   * Write the results kept in memory while the store was down, oldest first. One flush at a
+   * time: other workers wait for it, so no result is written twice.
+   */
+  flushPendingRecords() {
+    if (!this.flushing) {
+      this.flushing = (async () => {
+        while (this.pendingRecords.length > 0) {
+          const { store, method, args } = this.pendingRecords[0];
+          await store[method](...args);
+          this.pendingRecords.shift();
+        }
+      })().finally(() => {
+        this.flushing = null;
+      });
     }
+    return this.flushing;
   }
 
   storeFailed(error) {

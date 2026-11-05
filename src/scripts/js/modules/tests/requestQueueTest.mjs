@@ -277,6 +277,72 @@ export class RequestQueueTest extends LocalDatabaseTest {
     }
   }
 
+  /**
+   * Several workers: a slow request (a service still waking) doesn't hold up the others, and
+   * each job is still sent once.
+   */
+  async checkConcurrency() {
+    console.log('\nConcurrency');
+    const slowPaths = new Set(['/slow']);
+    this.service.beforeRespond = async () => {
+      const last = this.service.received[this.service.received.length - 1];
+      if (slowPaths.has(last.path)) await new Promise((resolve) => setTimeout(resolve, 1500));
+    };
+    const make = (concurrency) =>
+      new RequestQueue({
+        name: `concurrency-${concurrency}`,
+        transport: new HttpTransport({ baseUrl: this.service.baseUrl, timeoutMs: 5000 }),
+        concurrency,
+      });
+    try {
+      for (const concurrency of [1, 3]) {
+        const queue = make(concurrency);
+        await queue.start();
+        try {
+          const started = Date.now();
+          const slow = queue.request({ method: 'GET', path: '/slow' });
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          const fast = await queue.request({ method: 'GET', path: '/fast' });
+          const fastMs = Date.now() - started;
+          await slow;
+          if (concurrency === 1) {
+            this.check(
+              'one worker: a fast request waits behind a slow one',
+              fastMs >= 1400,
+              `${fastMs} ms`
+            );
+          } else {
+            this.check(
+              'several workers: a fast request is not held up by a slow one',
+              fast.status === 200 && fastMs < 1000,
+              `${fastMs} ms`
+            );
+          }
+        } finally {
+          await queue.stop();
+        }
+      }
+      const before = this.service.received.length;
+      const queue = make(4);
+      await queue.start();
+      try {
+        await Promise.all(
+          Array.from({ length: 12 }, (_, i) => queue.request({ method: 'GET', path: `/many/${i}` }))
+        );
+      } finally {
+        await queue.stop();
+      }
+      const paths = this.service.received.slice(before).map((r) => r.path);
+      this.check(
+        '12 requests on 4 workers: each sent exactly once',
+        paths.length === 12 && new Set(paths).size === 12,
+        String(paths.length)
+      );
+    } finally {
+      this.service.beforeRespond = null;
+    }
+  }
+
   async checkStartWaitsForDatabase() {
     console.log('\nStart-up: the queue database is down at first');
     const port = await TcpRelay.freePort();
@@ -412,6 +478,7 @@ export class RequestQueueTest extends LocalDatabaseTest {
       await this.checkDurability();
       await this.checkTimeoutAndSecrets();
       await this.checkPerRequestTimeout();
+      await this.checkConcurrency();
       await this.checkStartWaitsForDatabase();
       await this.checkDatabaseDropMidRun();
       await this.checkResultRecordedAfterOutage();

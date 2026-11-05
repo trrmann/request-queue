@@ -9,6 +9,12 @@
 
 ## resolved
 
+- **Several workers (v0.1.6, 2026-11-05).** `concurrency` (default 1) sends that many requests at once. With one
+  worker, a request to a service still waking (a Render cold start takes 20–60 s, each try cut at the transport
+  timeout) held up every other request, so callers behind it could time out; production saw a FlashCards login fail
+  with 503 that way. Workers wake on new work, and the in-memory results are written by one flush at a time.
+  **Resolved:** `npm test` 32/32. The new checks show one worker making a fast request wait behind a slow one,
+  several workers not, and 12 requests on 4 workers each sent exactly once.
 - **Per-request timeout (v0.1.5, 2026-11-04).** A request may carry its own `timeoutMs`; `HttpTransport` uses it
   instead of its default for that try. Needed for slow calls such as the IAM service's backup import (phase 3d), which
   must not be cut off at 15 s and retried while still running. Also on platform-db v0.2.4. **Resolved:** `npm test`
