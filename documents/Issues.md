@@ -9,6 +9,8 @@
 
 ## resolved
 
+- **On platform-db v0.2.5 (v0.1.7, 2026-11-05).** Keeps the platform's shared packages on one version each (FlashCards'
+  start-up test now checks this). **Resolved:** `npm test` 32/32.
 - **Several workers (v0.1.6, 2026-11-05).** `concurrency` (default 1) sends that many requests at once. With one
   worker, a request to a service still waking (a Render cold start takes 20–60 s, each try cut at the transport
   timeout) held up every other request, so callers behind it could time out; production saw a FlashCards login fail

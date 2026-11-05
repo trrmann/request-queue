@@ -1,6 +1,6 @@
 {
   "name": "request-queue",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "Durable, rate-limited request queue for calling services that may be asleep",
   "license": "ISC",
@@ -20,7 +20,7 @@
     "verify": "npm run format && npm run lint"
   },
   "dependencies": {
-    "platform-db": "git+https://github.com/trrmann/platform-db.git#v0.2.4"
+    "platform-db": "git+https://github.com/trrmann/platform-db.git#v0.2.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
